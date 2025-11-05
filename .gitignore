@@ -3,9 +3,9 @@ __pycache__/
 *.pyc
 .streamlit/secrets.toml
 
-# Model assets (keep directory, ignore large binaries by default)
-model_assets/*
-!model_assets/.gitkeep
+# Model assets - allow model files
+# model_assets/*
+# !model_assets/.gitkeep
 
 # Jupyter checkpoints
 .ipynb_checkpoints/
