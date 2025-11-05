@@ -11,3 +11,5 @@ model_assets/*
 .ipynb_checkpoints/
 
 
+all_files.zip
+content/models/RF_cw.joblib
