@@ -27,11 +27,19 @@ COPY .streamlit /app/.streamlit
 RUN mkdir -p /app/model_assets
 COPY model_assets/ /app/model_assets/
 
+# Copy content directory (for data file used in feature encoding)
+RUN mkdir -p /app/content
+COPY content/ /app/content/
+
 # Optional: copy test script for quick in-container verification
 COPY test_predict.py /app/test_predict.py
 
+# Hugging Face Spaces uses PORT environment variable or defaults to 7860
+# Expose both ports for compatibility
+EXPOSE 7860
 EXPOSE 8051
 
-CMD ["streamlit", "run", "streamlit_app.py", "--server.headless=true", "--server.address=0.0.0.0", "--server.port=8051"]
+# Use PORT environment variable if set, otherwise default to 7860 (Hugging Face standard)
+CMD ["sh", "-c", "streamlit run streamlit_app.py --server.headless=true --server.address=0.0.0.0 --server.port=${PORT:-7860}"]
 
 
