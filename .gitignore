@@ -1,15 +1,68 @@
-# Python / Streamlit
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Model files (if too large, use Git LFS or exclude)
+# Uncomment if models are too large for GitHub
+# *.joblib
+# content/models/*.joblib
+# model_assets/*.joblib
+
+# Data files (usually too large)
+# content/cardio_train_extended.csv
+
+# Logs
+*.log
+optimization_log.txt
+optimization_v2_log.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore
+
+# Streamlit
 .streamlit/secrets.toml
 
-# Model assets - allow model files
-# model_assets/*
-# !model_assets/.gitkeep
-
-# Jupyter checkpoints
-.ipynb_checkpoints/
-
-
-all_files.zip
-content/models/RF_cw.joblib
+# Temporary files
+*.tmp
+*.bak
+*.swp

@@ -1,0 +1,33 @@
+FROM python:3.11-slim
+
+# Prevents Python from writing .pyc files and buffering stdout/stderr
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# System deps for lightgbm, xgboost, catboost (build and runtime)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libgomp1 \
+        curl \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy dependency list and install
+COPY requirements.txt /app/requirements.txt
+RUN pip install --upgrade pip \
+    && pip install -r requirements.txt
+
+# Copy optimization scripts
+COPY improve_models.py /app/improve_models.py
+COPY feature_importance_analysis.py /app/feature_importance_analysis.py
+COPY compare_models.py /app/compare_models.py
+
+# Copy data directory (will be mounted as volume, but include for reference)
+RUN mkdir -p /app/content/models /app/content/reports
+
+# Default command: run optimization
+CMD ["python", "improve_models.py"]
+

@@ -296,8 +296,14 @@ def load_performance_metrics():
         os.path.join(BASE_DIR, "content", "models", "hybrid_metrics.csv"),
     ]
 
-    # Load model metrics
-    for fp in candidate_model_metrics:
+    # Load model metrics - prioritize optimized metrics
+    candidate_model_metrics_priority = [
+        os.path.join(BASE_DIR, "content", "models", "model_metrics_optimized.csv"),
+        os.path.join(BASE_DIR, "model_assets", "model_metrics_optimized.csv"),
+        os.path.join(BASE_DIR, "content", "models", "model_metrics_best.csv"),
+    ] + candidate_model_metrics
+    
+    for fp in candidate_model_metrics_priority:
         if os.path.exists(fp):
             try:
                 df = pd.read_csv(fp)
@@ -322,8 +328,14 @@ def load_performance_metrics():
             if metrics_rows:
                 break
 
-    # Load hybrid/ensemble metrics
-    for fp in candidate_hybrid_metrics:
+    # Load hybrid/ensemble metrics - prioritize optimized metrics
+    candidate_hybrid_metrics_priority = [
+        os.path.join(BASE_DIR, "content", "models", "hybrid_metrics_best.csv"),
+        os.path.join(BASE_DIR, "model_assets", "hybrid_metrics.csv"),
+        os.path.join(BASE_DIR, "content", "models", "hybrid_metrics.csv"),
+    ] + candidate_hybrid_metrics
+    
+    for fp in candidate_hybrid_metrics_priority:
         if os.path.exists(fp):
             try:
                 dfh = pd.read_csv(fp)
@@ -376,20 +388,28 @@ def get_algo_metrics(metrics_rows, algo_name: str):
                     best = row
     return best
 
-def get_ensemble_metrics(hybrid_rows):
+def get_ensemble_metrics(hybrid_rows, metrics_rows=None):
     """Return the preferred ensemble metrics row.
-    Preference: 'Ensemble_best@0.5' -> 'Ensemble@0.5' -> first Ensemble row.
+    Preference: 'Ensemble_optimized' from model_metrics -> 'Ensemble_best@0.5' -> 'Ensemble@0.5' -> first Ensemble row.
     """
+    # First, try to get Ensemble_optimized from model_metrics (most recent optimized)
+    if metrics_rows:
+        for row in metrics_rows:
+            model_name = str(row.get("model", "")).upper()
+            if "ENSEMBLE" in model_name and "OPTIMIZED" in model_name:
+                return row
+    
+    # Then check hybrid_rows
     if not hybrid_rows:
         return None
     # Normalize
     rows = list(hybrid_rows)
-    # First preference
+    # First preference: Ensemble_best@0.5
     for r in rows:
         ver = str(r.get("version", ""))
         if ver.lower() == "ensemble_best@0.5" or ("ensemble_best" in ver.lower() and "@0.5" in ver.lower()):
             return r
-    # Second preference
+    # Second preference: Ensemble@0.5
     for r in rows:
         ver = str(r.get("version", ""))
         if ver.lower() == "ensemble@0.5" or ("ensemble" in ver.lower() and "@0.5" in ver.lower()):
@@ -413,15 +433,15 @@ def load_models():
         st.warning(f"Preprocessor load skipped: {e}")
 
     models = {}
-    # Resolve paths
+    # Resolve paths - prioritize optimized models
     xgb_path = find_first_existing([
-        "XGB_spw.joblib", "XGBoost.joblib", "xgb_model.joblib", "xgb_full.joblib", "XGBoost_best_5cv.joblib"
+        "XGBoost_optimized.joblib", "XGB_spw.joblib", "XGBoost.joblib", "xgb_model.joblib", "xgb_full.joblib", "XGBoost_best_5cv.joblib"
     ])
     cat_path = find_first_existing([
-        "CAT_cw.joblib", "CatBoost.joblib", "catboost.joblib", "cat_model.joblib", "cat_full.joblib", "CatBoost_best_5cv.joblib"
+        "CatBoost_optimized.joblib", "CAT_cw.joblib", "CatBoost.joblib", "catboost.joblib", "cat_model.joblib", "cat_full.joblib", "CatBoost_best_5cv.joblib"
     ])
     lgb_path = find_first_existing([
-        "LGBM_cw.joblib", "LightGBM.joblib", "lgb_model.joblib", "LightGBM_best_5cv.joblib"
+        "LightGBM_optimized.joblib", "LGBM_cw.joblib", "LightGBM.joblib", "lgb_model.joblib", "LightGBM_best_5cv.joblib"
     ])
 
     # Load each model independently so one failure doesn't break others
@@ -520,17 +540,54 @@ if not ("XGBoost" in models and "CatBoost" in models):
     st.error("⚠️ Ensemble requires both XGBoost and CatBoost models. Please ensure both artifacts are present in `model_assets/`.")
     st.stop()
 
+# Load ensemble configuration (weights and thresholds)
+ensemble_config = None
+ensemble_info_paths = [
+    os.path.join(BASE_DIR, "model_assets", "ensemble_info_optimized.json"),
+    os.path.join(BASE_DIR, "content", "models", "ensemble_info_optimized.json"),
+]
+for path in ensemble_info_paths:
+    if os.path.exists(path):
+        try:
+            with open(path, 'r') as f:
+                ensemble_config = json.load(f)
+            break
+        except Exception as e:
+            continue
+
+# Default ensemble weights if config not found
+if ensemble_config:
+    ensemble_weights_config = ensemble_config.get('weights', {})
+    default_xgb_weight = ensemble_weights_config.get('XGBoost', 0.5)
+    default_cat_weight = ensemble_weights_config.get('CatBoost', 0.5)
+    default_lgb_weight = ensemble_weights_config.get('LightGBM', 0.0)
+else:
+    default_xgb_weight = 0.5
+    default_cat_weight = 0.5
+    default_lgb_weight = 0.0
+
 # Main title
 st.markdown('<h1 class="main-header">Predicting Heart Attack Risk: An Ensemble Modeling Approach</h1>', unsafe_allow_html=True)
-st.markdown('<p class="subtitle">Advanced machine learning ensemble combining XGBoost and CatBoost for accurate cardiovascular risk assessment</p>', unsafe_allow_html=True)
+st.markdown('<p class="subtitle">Advanced machine learning ensemble combining XGBoost, CatBoost, and LightGBM for accurate cardiovascular risk assessment</p>', unsafe_allow_html=True)
 st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
 # Sidebar for model info
 with st.sidebar:
     st.header("📊 Ensemble")
-    st.success("✅ Using Ensemble Only (50% XGBoost + 50% CatBoost)")
+    # Display ensemble weights
+    if ensemble_config:
+        weights = ensemble_config.get('weights', {})
+        xgb_w = weights.get('XGBoost', 0.5) * 100
+        cat_w = weights.get('CatBoost', 0.5) * 100
+        lgb_w = weights.get('LightGBM', 0.0) * 100
+        if lgb_w > 0:
+            st.success(f"✅ Using Optimized Ensemble\nXGBoost: {xgb_w:.1f}% | CatBoost: {cat_w:.1f}% | LightGBM: {lgb_w:.1f}%")
+        else:
+            st.success(f"✅ Using Optimized Ensemble\nXGBoost: {xgb_w:.1f}% | CatBoost: {cat_w:.1f}%")
+    else:
+        st.success("✅ Using Ensemble (50% XGBoost + 50% CatBoost)")
     _model_rows, _hybrid_rows = load_performance_metrics()
-    ens_row = get_ensemble_metrics(_hybrid_rows)
+    ens_row = get_ensemble_metrics(_hybrid_rows, _model_rows)
     acc_text = f"{ens_row['accuracy']*100:.2f}%" if ens_row and ens_row.get('accuracy') is not None else "n/a"
     rec_text = f"{ens_row['recall']*100:.2f}%" if ens_row and ens_row.get('recall') is not None else "n/a"
     cols_side = st.columns(2)
@@ -659,7 +716,7 @@ with col7:
         risk_factors.append("Alcohol")
     if active == 0:
         lifestyle_score += 1
-        risk_factors.append("Inactive")
+        risk_factors.append("Physical inactivity")
     
     if lifestyle_score == 0:
         score_label = "✅ Low Risk"
@@ -719,11 +776,11 @@ elif ap_hi < 140 or ap_lo < 90:
 else:
     bp_category = "Stage 2"
 
-# Risk Level
+# Risk Level (Note: data uses "Moderate" not "Medium")
 if health_risk_score <= 2:
     risk_level = "Low"
 elif health_risk_score <= 4:
-    risk_level = "Medium"
+    risk_level = "Moderate"  # Changed from "Medium" to match training data
 else:
     risk_level = "High"
 
@@ -746,7 +803,7 @@ if lifestyle_score > 0:
     if alco == 1:
         reasons.append("Alcohol consumption")
     if active == 0:
-        reasons.append("Inactive")
+        reasons.append("Physical inactivity")
 if not reasons:
     reasons.append("Healthy indicators")
 reason = ", ".join(reasons)
@@ -869,36 +926,38 @@ if predict_button:
         X_input = pd.DataFrame([input_row])[feature_cols]
         
         # The model expects numeric features - categorical columns were one-hot encoded during training
-        # Load sample data to get all possible categorical values for proper one-hot encoding
+        # Load FULL dataset to get ALL possible categorical values (matching training)
         sample_csv = os.path.join(BASE_DIR, "content", "cardio_train_extended.csv")
         cat_cols = ['Age_Group', 'BMI_Category', 'BP_Category', 'Risk_Level']
         
+        # Get all categorical values from FULL dataset (not just sample)
         if os.path.exists(sample_csv):
-            # Load sample to get all categorical values
-            sample_df = pd.read_csv(sample_csv, nrows=1000)
-            # Get all unique values for each categorical column
+            # Load full dataset to get ALL unique values (matching training)
+            full_df = pd.read_csv(sample_csv)
             cat_values = {}
             for col in cat_cols:
-                if col in sample_df.columns:
-                    cat_values[col] = sorted(sample_df[col].unique().tolist())
+                if col in full_df.columns:
+                    # Get all unique values and sort them (matching pandas get_dummies behavior)
+                    cat_values[col] = sorted(full_df[col].unique().tolist())
         else:
-            # Fallback to known values
+            # Fallback to known values (matching actual data)
             cat_values = {
                 'Age_Group': ['20-29', '30-39', '40-49', '50-59', '60+'],
-                'BMI_Category': ['Underweight', 'Normal', 'Overweight', 'Obese'],
-                'BP_Category': ['Normal', 'Elevated', 'Stage 1', 'Stage 2'],
-                'Risk_Level': ['Low', 'Medium', 'High']
+                'BMI_Category': ['Normal', 'Obese', 'Overweight', 'Underweight'],  # Sorted order from data
+                'BP_Category': ['Elevated', 'Normal', 'Stage 1', 'Stage 2'],  # Sorted order from data
+                'Risk_Level': ['High', 'Low', 'Moderate']  # Note: "Moderate" not "Medium"
             }
         
         # Separate numeric and categorical columns
         numeric_cols = [col for col in X_input.columns if col not in cat_cols]
         X_numeric = X_input[numeric_cols].copy()
         
-        # One-hot encode categorical columns with all possible categories
+        # One-hot encode categorical columns with all possible categories in sorted order
+        # This matches pandas get_dummies behavior during training
         X_cat_encoded_list = []
         for col in cat_cols:
             if col in X_input.columns:
-                # Create one-hot columns for all possible values
+                # Create one-hot columns for all possible values in sorted order
                 for val in cat_values.get(col, []):
                     col_name = f"{col}_{val}"
                     X_cat_encoded_list.append(pd.Series([1 if X_input[col].iloc[0] == val else 0], name=col_name))
@@ -913,12 +972,24 @@ if predict_button:
         # Ensure all columns are numeric (float)
         X_processed = X_processed.astype(float)
         
-        # Use ensemble model (50% XGBoost + 50% CatBoost) if both available, otherwise use best model
+        # Use ensemble model with optimized weights
         predictions = {}
         ensemble_probs = []
         ensemble_weights = []
         
-        # Try ensemble: XGBoost + CatBoost (0.5 each)
+        # Get ensemble weights from config or use defaults
+        xgb_weight = default_xgb_weight if ensemble_config else 0.5
+        cat_weight = default_cat_weight if ensemble_config else 0.5
+        lgb_weight = default_lgb_weight if ensemble_config else 0.0
+        
+        # Normalize weights to sum to 1.0
+        total_weight = xgb_weight + cat_weight + lgb_weight
+        if total_weight > 0:
+            xgb_weight = xgb_weight / total_weight
+            cat_weight = cat_weight / total_weight
+            lgb_weight = lgb_weight / total_weight
+        
+        # Try ensemble: XGBoost + CatBoost + LightGBM (if available)
         if "XGBoost" in models and "CatBoost" in models:
             try:
                 # Predict with XGBoost
@@ -957,8 +1028,9 @@ if predict_button:
                 
                 if hasattr(xgb_model, 'predict_proba'):
                     xgb_prob = float(xgb_model.predict_proba(X_xgb)[0, 1])
-                    ensemble_probs.append(xgb_prob)
-                    ensemble_weights.append(0.5)
+                    if xgb_weight > 0:
+                        ensemble_probs.append(xgb_prob)
+                        ensemble_weights.append(xgb_weight)
                     predictions["XGBoost"] = xgb_prob
             except Exception as e:
                 st.warning(f"⚠️ XGBoost prediction failed (using CatBoost only): {str(e)}")
@@ -968,35 +1040,84 @@ if predict_button:
         if "CatBoost" in models:
             try:
                 cat_model = models["CatBoost"]
-                if hasattr(cat_model, 'feature_names_in_'):
+                # CatBoost is very strict about feature order and names
+                if hasattr(cat_model, 'feature_names_'):
+                    # CatBoost uses feature_names_ (with underscore)
+                    expected_features = list(cat_model.feature_names_)
+                elif hasattr(cat_model, 'feature_names_in_'):
                     expected_features = list(cat_model.feature_names_in_)
-                    X_aligned = pd.DataFrame(0, index=X_processed.index, columns=expected_features)
+                else:
+                    expected_features = None
+                
+                if expected_features:
+                    # Create DataFrame with exact feature order and names expected by CatBoost
+                    X_aligned = pd.DataFrame(0.0, index=X_processed.index, columns=expected_features, dtype=float)
+                    # Match columns by name
                     for col in X_processed.columns:
                         if col in X_aligned.columns:
-                            X_aligned[col] = X_processed[col]
-                    X_cat = X_aligned
+                            X_aligned[col] = X_processed[col].values
+                    X_cat = X_aligned[expected_features]  # Ensure exact order
                 else:
                     X_cat = X_processed
                 
                 if hasattr(cat_model, 'predict_proba'):
                     cat_prob = float(cat_model.predict_proba(X_cat)[0, 1])
-                    ensemble_probs.append(cat_prob)
-                    ensemble_weights.append(0.5)
+                    if cat_weight > 0:
+                        ensemble_probs.append(cat_prob)
+                        ensemble_weights.append(cat_weight)
                     predictions["CatBoost"] = cat_prob
             except Exception as e:
                 st.warning(f"CatBoost prediction failed: {e}")
         
-        # Ensemble-only: require both model probabilities
+        # Predict with LightGBM (if included in ensemble)
+        if "LightGBM" in models and lgb_weight > 0:
+            try:
+                lgb_model = models["LightGBM"]
+                # LightGBM is strict about feature order and names
+                if hasattr(lgb_model, 'feature_name_'):
+                    # LightGBM uses feature_name_ (with underscore, singular)
+                    expected_features = list(lgb_model.feature_name_)
+                elif hasattr(lgb_model, 'feature_names_in_'):
+                    expected_features = list(lgb_model.feature_names_in_)
+                else:
+                    expected_features = None
+                
+                if expected_features:
+                    # Create DataFrame with exact feature order and names expected by LightGBM
+                    X_aligned = pd.DataFrame(0.0, index=X_processed.index, columns=expected_features, dtype=float)
+                    # Match columns by name
+                    for col in X_processed.columns:
+                        if col in X_aligned.columns:
+                            X_aligned[col] = X_processed[col].values
+                    X_lgb = X_aligned[expected_features]  # Ensure exact order
+                else:
+                    X_lgb = X_processed
+                
+                if hasattr(lgb_model, 'predict_proba'):
+                    lgb_prob = float(lgb_model.predict_proba(X_lgb)[0, 1])
+                    ensemble_probs.append(lgb_prob)
+                    ensemble_weights.append(lgb_weight)
+                    predictions["LightGBM"] = lgb_prob
+            except Exception as e:
+                st.warning(f"LightGBM prediction failed: {e}")
+        
+        # Ensemble: require at least XGBoost and CatBoost probabilities
         if len(ensemble_probs) >= 2:
+            # Normalize weights to sum to 1.0
+            total_weight = sum(ensemble_weights)
+            if total_weight > 0:
+                ensemble_weights = [w / total_weight for w in ensemble_weights]
             # Ensemble prediction (weighted average)
             ensemble_prob = np.average(ensemble_probs, weights=ensemble_weights)
             predictions["Ensemble"] = ensemble_prob
         else:
-            st.error("Ensemble prediction requires both XGBoost and CatBoost probabilities.")
+            st.error("Ensemble prediction requires at least XGBoost and CatBoost probabilities.")
             with st.expander("Debug Info"):
                 st.write("XGBoost available:", "XGBoost" in models)
                 st.write("CatBoost available:", "CatBoost" in models)
+                st.write("LightGBM available:", "LightGBM" in models)
                 st.write("Ensemble probs count:", len(ensemble_probs))
+                st.write("Ensemble weights:", ensemble_weights)
             st.stop()
         
         if not predictions:
@@ -1057,71 +1178,118 @@ if predict_button:
         </div>
         """, unsafe_allow_html=True)
         
-        # Display Reason
-        st.info(f"**Key Risk Factors Identified:** {reason}")
+        # Display Reason with better formatting
+        if reason and reason != "Healthy indicators":
+            # Check if only "Physical inactivity" is the risk factor (less severe)
+            if reason == "Physical inactivity":
+                st.info(f"**ℹ️ Lifestyle Note:** {reason} - Consider adding regular physical activity to reduce risk.")
+            else:
+                st.warning(f"**⚠️ Key Risk Factors Identified:** {reason}")
+        else:
+            st.success(f"**✅ Health Status:** {reason}")
         
         # Detailed breakdown with visual bars
         with st.expander("📊 Model Details & Breakdown"):
-            # Ensemble-only display
-            display_order = ["Ensemble"] if "Ensemble" in predictions else []
-            
             # Load accuracy/recall metrics for display under each model
             _model_rows_all, _hybrid_rows_all = load_performance_metrics()
             xgb_m_all = get_algo_metrics(_model_rows_all, "XGBoost")
             cat_m_all = get_algo_metrics(_model_rows_all, "CatBoost")
-            avg_acc_all = None
-            if xgb_m_all and cat_m_all and (xgb_m_all.get("accuracy") is not None) and (cat_m_all.get("accuracy") is not None):
-                avg_acc_all = (xgb_m_all["accuracy"] + cat_m_all["accuracy"]) / 2.0
-            ens_best_all = None
-            for hr in _hybrid_rows_all or []:
-                if "ENSEMBLE" in hr.get("version", "").upper() and "@0.5" in hr.get("version", ""):
-                    ens_best_all = hr
+            lgb_m_all = get_algo_metrics(_model_rows_all, "LightGBM")
+            
+            # Get optimized ensemble metrics
+            ens_opt_all = None
+            for row in _model_rows_all or []:
+                model_name = str(row.get("model", "")).upper()
+                if "ENSEMBLE" in model_name and "OPTIMIZED" in model_name:
+                    ens_opt_all = row
                     break
-
-            # Explicit ensemble header with models and average accuracy
-            header_text = "Ensemble uses: XGBoost + CatBoost"
-            if avg_acc_all is not None:
-                st.markdown(f"**{header_text}**  ·  Average@0.5 Accuracy: {avg_acc_all*100:.2f}%")
+            
+            # Explicit ensemble header with models and weights
+            if ensemble_config:
+                weights = ensemble_config.get('weights', {})
+                xgb_w = weights.get('XGBoost', 0.5) * 100
+                cat_w = weights.get('CatBoost', 0.5) * 100
+                lgb_w = weights.get('LightGBM', 0.0) * 100
+                if lgb_w > 0:
+                    header_text = f"Ensemble uses: XGBoost ({xgb_w:.1f}%) + CatBoost ({cat_w:.1f}%) + LightGBM ({lgb_w:.1f}%)"
+                else:
+                    header_text = f"Ensemble uses: XGBoost ({xgb_w:.1f}%) + CatBoost ({cat_w:.1f}%)"
+            else:
+                header_text = "Ensemble uses: XGBoost + CatBoost"
+            
+            if ens_opt_all and ens_opt_all.get("accuracy") is not None:
+                st.markdown(f"**{header_text}**  ·  Accuracy: {ens_opt_all['accuracy']*100:.2f}% | Recall: {ens_opt_all['recall']*100:.2f}%")
             else:
                 st.markdown(f"**{header_text}**")
-
-            # Create columns for display
-            if len(display_order) > 0:
-                cols = st.columns(len(display_order))
-                for idx, name in enumerate(display_order):
-                    with cols[idx]:
-                        if name == "Ensemble":
-                            st.write(f"**🎯 {name} (Final)**")
-                            risk_prob = float(predictions[name])
-                            risk_pct = risk_prob * 100
-                            
-                            # Custom progress bar that fills proportionally to risk
-                            st.markdown(f"""
-                            <div style="background: rgba(148, 163, 184, 0.1); border-radius: 10px; height: 32px; width: 100%; position: relative; overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.2);">
-                                <div style="background: linear-gradient(90deg, {'#EF4444' if risk_pct >= 50 else '#F59E0B' if risk_pct >= 30 else '#10B981'}, {'#DC2626' if risk_pct >= 50 else '#D97706' if risk_pct >= 30 else '#059669'}); width: {risk_pct}%; height: 100%; border-radius: 10px; transition: width 0.3s ease; display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; font-size: 0.9rem;">
-                                    {risk_pct:.1f}%
-                                </div>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            st.caption(f"Risk Level: {risk_pct:.2f}%")
-                            
-                            # Show ensemble accuracy from average and recorded best if available
-                            if avg_acc_all is not None:
-                                st.caption(f"Accuracy (Average@0.5): {avg_acc_all*100:.2f}%")
-                            if ens_best_all and ens_best_all.get("accuracy") is not None:
-                                st.caption(f"Recorded Ensemble_best@0.5: {ens_best_all['accuracy']*100:.2f}%")
-                            st.success("✅ Final decision uses Ensemble (50% XGBoost + 50% CatBoost)")
-                        else:
-                            pass  # No individual model cards in ensemble-only mode
+            
+            # Helper function to create risk bar with percentage inside
+            def create_risk_bar(risk_pct, model_name):
+                # Use teal/green color for low risk, orange for moderate, red for high
+                if risk_pct >= 50:
+                    color = '#EF4444'  # Red
+                elif risk_pct >= 30:
+                    color = '#F59E0B'  # Orange
+                else:
+                    color = '#14B8A6'  # Teal/Green
+                
+                # Ensure bar width doesn't exceed 100%
+                bar_width = min(risk_pct, 100)
+                
+                return f"""
+                <div style="background: rgba(148, 163, 184, 0.15); border-radius: 8px; height: 36px; width: 100%; position: relative; overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.3); margin: 8px 0;">
+                    <div style="background: {color}; width: {bar_width}%; height: 100%; border-radius: 8px; display: flex; align-items: center; justify-content: flex-start; padding-left: 8px; color: white; font-weight: 600; font-size: 0.85rem; transition: width 0.3s ease;">
+                        {risk_pct:.2f}%
+                    </div>
+                </div>
+                """
+            
+            # Display all models horizontally on the same line (4 columns)
+            models_to_show = []
+            
+            # Collect all available models in order
+            if "XGBoost" in predictions:
+                models_to_show.append(("XGBoost Model", "XGBoost"))
+            if "CatBoost" in predictions:
+                models_to_show.append(("CatBoost Model", "CatBoost"))
+            if "LightGBM" in predictions:
+                models_to_show.append(("LightGBM Model", "LightGBM"))
+            if "Ensemble" in predictions:
+                models_to_show.append(("🎯 Ensemble (Final)", "Ensemble"))
+            
+            # Create columns for all models - equal width
+            if models_to_show:
+                num_cols = len(models_to_show)
+                model_cols = st.columns(num_cols)
+                
+                for idx, (display_name, model_key) in enumerate(models_to_show):
+                    with model_cols[idx]:
+                        # Model title
+                        st.markdown(f"**{display_name}**", unsafe_allow_html=True)
+                        # Calculate risk percentage
+                        risk_pct = float(predictions[model_key]) * 100
+                        # Display progress bar
+                        st.markdown(create_risk_bar(risk_pct, model_key), unsafe_allow_html=True)
+                        # Risk percentage below bar
+                        st.markdown(f"<div style='text-align: center; margin-top: -8px; font-size: 0.85rem; color: #666;'>{risk_pct:.2f}% risk</div>", unsafe_allow_html=True)
             
             # Show ensemble info
             if "Ensemble" in predictions:
-                st.info("💡 **Ensemble Method**: Weighted average (50% XGBoost + 50% CatBoost). Final decision uses the Ensemble output.")
+                if ensemble_config:
+                    weights = ensemble_config.get('weights', {})
+                    xgb_w = weights.get('XGBoost', 0.5) * 100
+                    cat_w = weights.get('CatBoost', 0.5) * 100
+                    lgb_w = weights.get('LightGBM', 0.0) * 100
+                    if lgb_w > 0:
+                        st.info(f"💡 **Ensemble Method**: Weighted average (XGBoost: {xgb_w:.1f}%, CatBoost: {cat_w:.1f}%, LightGBM: {lgb_w:.1f}%). Final decision uses the Ensemble output.")
+                    else:
+                        st.info(f"💡 **Ensemble Method**: Weighted average (XGBoost: {xgb_w:.1f}%, CatBoost: {cat_w:.1f}%). Final decision uses the Ensemble output.")
+                else:
+                    st.info("💡 **Ensemble Method**: Weighted average (50% XGBoost + 50% CatBoost). Final decision uses the Ensemble output.")
 
             # Metrics breakdown: show per-model accuracy and averaged accuracy (concise)
             st.markdown("---")
             st.subheader("Ensemble Metrics")
-            ens_row_bd = get_ensemble_metrics(_hybrid_rows_all)
+            ens_row_bd = get_ensemble_metrics(_hybrid_rows_all, _model_rows_all)
             acc_bd = f"{ens_row_bd['accuracy']*100:.2f}%" if ens_row_bd and ens_row_bd.get('accuracy') is not None else "n/a"
             rec_bd = f"{ens_row_bd['recall']*100:.2f}%" if ens_row_bd and ens_row_bd.get('recall') is not None else "n/a"
             cols_acc = st.columns(2)
